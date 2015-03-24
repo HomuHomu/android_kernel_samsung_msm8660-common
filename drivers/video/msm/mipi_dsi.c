@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2012, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2008-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -84,6 +84,8 @@ static int mipi_dsi_off(struct platform_device *pdev)
 	struct msm_fb_data_type *mfd;
 	struct msm_panel_info *pinfo;
 
+	pr_debug("%s+:\n", __func__);
+
 	mfd = platform_get_drvdata(pdev);
 	pinfo = &mfd->panel_info;
 
@@ -92,7 +94,14 @@ static int mipi_dsi_off(struct platform_device *pdev)
 	else
 		down(&mfd->dma->mutex);
 
-	mdp4_overlay_dsi_state_set(ST_DSI_SUSPEND);
+	if (mfd->panel_info.type == MIPI_CMD_PANEL) {
+		mipi_dsi_prepare_clocks();
+		mipi_dsi_ahb_ctrl(1);
+		mipi_dsi_clk_enable();
+
+		/* make sure dsi_cmd_mdp is idle */
+		mipi_dsi_cmd_mdp_busy();
+	}
 
 	/* make sure dsi clk is on so that
 	 * dcs commands can be sent
@@ -169,6 +178,8 @@ static int mipi_dsi_on(struct platform_device *pdev)
 	u32 dummy_xres, dummy_yres;
 	int target_type = 0;
 
+	pr_debug("%s+:\n", __func__);
+
 	mfd = platform_get_drvdata(pdev);
 	fbi = mfd->fbi;
 	var = &fbi->var;
@@ -188,7 +199,7 @@ static int mipi_dsi_on(struct platform_device *pdev)
 
 	mipi_dsi_phy_ctrl(1);
 
-	if (mdp_rev == MDP_REV_42 && mipi_dsi_pdata)
+	if (mdp_rev >= MDP_REV_42 && mipi_dsi_pdata)
 		target_type = mipi_dsi_pdata->target_type;
 
 	mipi_dsi_phy_init(0, &(mfd->panel_info), target_type);
@@ -279,7 +290,8 @@ static int mipi_dsi_on(struct platform_device *pdev)
 	else
 		down(&mfd->dma->mutex);
 
-	ret = panel_next_on(pdev);
+	if (mfd->op_enable)
+		ret = panel_next_on(pdev);
 
 	mipi_dsi_op_mode_config(mipi->mode);
 
@@ -328,6 +340,9 @@ static int mipi_dsi_on(struct platform_device *pdev)
 			}
 			mipi_dsi_set_tear_on(mfd);
 		}
+		mipi_dsi_clk_disable();
+		mipi_dsi_ahb_ctrl(0);
+		mipi_dsi_unprepare_clocks();
 	}
 
 #ifdef CONFIG_MSM_BUS_SCALING
@@ -335,8 +350,6 @@ static int mipi_dsi_on(struct platform_device *pdev)
 	perf_current.mdp_bw = OVERLAY_PERF_LEVEL4;
 	perf_current.mdp_clk_rate = 0;
 #endif
-
-	mdp4_overlay_dsi_state_set(ST_DSI_RESUME);
 
 	if (mdp_rev >= MDP_REV_41)
 		mutex_unlock(&mfd->dma->ov_mutex);
@@ -416,7 +429,7 @@ static int mipi_dsi_probe(struct platform_device *pdev)
 
 		disable_irq(dsi_irq);
 
-		if (mdp_rev == MDP_REV_42 && mipi_dsi_pdata &&
+		if (mdp_rev >= MDP_REV_42 && mipi_dsi_pdata &&
 			mipi_dsi_pdata->target_type == 1) {
 			/* Target type is 1 for device with (De)serializer
 			 * 0x4f00000 is the base for TV Encoder.
