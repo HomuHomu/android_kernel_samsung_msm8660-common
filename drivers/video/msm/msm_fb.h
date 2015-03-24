@@ -47,6 +47,9 @@
 #include "msm_fb_panel.h"
 #include "mdp.h"
 
+#ifdef CONFIG_FB_MSM_HDMI_MSM_PANEL
+#define HDMI_VIDEO_QUANTIZATION_ISSUE
+#endif
 #define MSM_FB_DEFAULT_PAGE_SIZE 2
 #define MFD_KEY  0x11161126
 #define MSM_FB_MAX_DEV_LIST 32
@@ -81,7 +84,7 @@ struct msm_fb_data_type {
 	DISP_TARGET dest;
 	struct fb_info *fbi;
 
-	struct device *dev;
+	struct delayed_work backlight_worker;
 	boolean op_enable;
 	uint32 fb_imgType;
 	boolean sw_currently_refreshing;
@@ -127,6 +130,7 @@ struct msm_fb_data_type {
 	__u32 channel_irq;
 
 	struct mdp_dma_data *dma;
+	struct device_attribute dev_attr;
 	void (*dma_fnc) (struct msm_fb_data_type *mfd);
 	int (*cursor_update) (struct fb_info *info,
 			      struct fb_cursor *cursor);
@@ -135,6 +139,8 @@ struct msm_fb_data_type {
 	int (*do_histogram) (struct fb_info *info,
 			      struct mdp_histogram_data *hist);
 	void (*vsync_ctrl) (int enable);
+	void (*vsync_init) (int cndx);
+	void *vsync_show;
 	void *cursor_buf;
 	void *cursor_buf_phys;
 
@@ -185,7 +191,24 @@ struct msm_fb_data_type {
 	u32 writeback_state;
 	bool writeback_active_cnt;
 	int cont_splash_done;
+	int vsync_sysfs_created;
+#if defined(CONFIG_USA_MODEL_SGH_I727) || defined(CONFIG_USA_MODEL_SGH_T989)
+	u32 last_acq_fen_cnt;    
+    	struct mutex sync_mutex;
+   	struct completion commit_comp;
+   	u32 is_committing;
+    	struct work_struct commit_work;
+    	void *msm_fb_backup;
+#endif
 };
+
+#if defined(CONFIG_USA_MODEL_SGH_I727) || defined(CONFIG_USA_MODEL_SGH_T989)
+struct msm_fb_backup_type {
+       struct fb_info info;
+       struct fb_var_screeninfo var;
+       struct msm_fb_data_type mfd;
+};
+#endif
 
 struct dentry *msm_fb_get_debugfs_root(void);
 void msm_fb_debugfs_file_create(struct dentry *root, const char *name,

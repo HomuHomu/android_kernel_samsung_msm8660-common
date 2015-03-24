@@ -666,7 +666,7 @@ int __init socinfo_init(void)
 		break;
 	case 3:
 		pr_info("%s: v%u, id=%u, ver=%u.%u, "
-			 "raw_id=%u, raw_ver=%u, hw_plat=%u\n",
+			 "raw_id=%u, raw_ver=%u, hw_pla-t=%u\n",
 			__func__, socinfo->v1.format, socinfo->v1.id,
 			SOCINFO_VERSION_MAJOR(socinfo->v1.version),
 			SOCINFO_VERSION_MINOR(socinfo->v1.version),
@@ -675,7 +675,7 @@ int __init socinfo_init(void)
 		break;
 	case 4:
 		pr_info("%s: v%u, id=%u, ver=%u.%u, "
-			 "raw_id=%u, raw_ver=%u, hw_plat=%u, hw_plat_ver=%u\n",
+			 "raw_id=%u, raw_ver=%u, hw_pla-t=%u, hw_pla-t_ver=%u\n",
 			__func__, socinfo->v1.format, socinfo->v1.id,
 			SOCINFO_VERSION_MAJOR(socinfo->v1.version),
 			SOCINFO_VERSION_MINOR(socinfo->v1.version),
@@ -684,7 +684,7 @@ int __init socinfo_init(void)
 		break;
 	case 5:
 		pr_info("%s: v%u, id=%u, ver=%u.%u, "
-			 "raw_id=%u, raw_ver=%u, hw_plat=%u,  hw_plat_ver=%u\n"
+			 "raw_id=%u, raw_ver=%u, hw_pla-t=%u,  hw_pla-t_ver=%u\n"
 			" accessory_chip=%u\n", __func__, socinfo->v1.format,
 			socinfo->v1.id,
 			SOCINFO_VERSION_MAJOR(socinfo->v1.version),
@@ -695,7 +695,7 @@ int __init socinfo_init(void)
 		break;
 	case 6:
 		pr_info("%s: v%u, id=%u, ver=%u.%u, "
-			 "raw_id=%u, raw_ver=%u, hw_plat=%u,  hw_plat_ver=%u\n"
+			 "raw_id=%u, raw_ver=%u, hw_pla-t=%u,  hw_pla-t_ver=%u\n"
 			" accessory_chip=%u hw_plat_subtype=%u\n", __func__,
 			socinfo->v1.format,
 			socinfo->v1.id,

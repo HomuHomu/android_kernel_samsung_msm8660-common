@@ -21,6 +21,7 @@
 #include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/wakelock.h>
+#include <linux/workqueue.h>
 #include <linux/mmc/card.h>
 #include <linux/dma-mapping.h>
 #include <mach/dma.h>
@@ -224,6 +225,8 @@ static unsigned long lock_flags1;
 static DEFINE_SPINLOCK(lock2);
 static unsigned long lock_flags2;
 
+static void sdio_dld_tear_down(struct work_struct *work);
+DECLARE_WORK(cleanup, sdio_dld_tear_down);
 /*
  * sdio_op_mode sets the operation mode of the sdio_dloader -
  * it may be in NORMAL_MODE, BOOT_TEST_MODE or AMSS_TEST_MODE
@@ -570,7 +573,7 @@ static int sdio_dld_debug_init(void)
 
 	sdio_dld_debug.sdio_al_dloader = debugfs_create_file(
 					"sdio_al_dloader_info",
-					S_IRUGO | S_IWUGO,
+					S_IRUGO | S_IWUSR |S_IWGRP,
 					sdio_dld_debug.sdio_dld_debug_root,
 					NULL,
 					&sdio_dld_debug_info_ops);
@@ -1104,9 +1107,22 @@ static void sdio_dld_push_timer_handler(unsigned long data)
 static int sdio_dld_open(struct tty_struct *tty, struct file *file)
 {
 	int status = 0;
-	int func_in_array =
-		REAL_FUNC_TO_FUNC_IN_ARRAY(sdio_dld->sdioc_boot_func);
-	struct sdio_func *str_func = sdio_dld->card->sdio_func[func_in_array];
+	int func_in_array = 0;
+	struct sdio_func *str_func = NULL;
+
+	/*during power on/off test, observed that, sysfs entry for tty driver [devices/virtual/tty/tty_sdio_00]
+	is not been removed during modem reset. Since entry already exists, downloader setup 
+	will encounter error and free the sdio_dld structure. this will lead to panic in the
+	sdio_dld_open function , Adding Null check. SR :01153219   */	
+
+	if(!sdio_dld){	 
+		 pr_err(MODULE_NAME ": %s - sdio_dld  is NULL.\n",
+                       __func__);
+                return -EINVAL;
+        }
+	
+	func_in_array =	REAL_FUNC_TO_FUNC_IN_ARRAY(sdio_dld->sdioc_boot_func);
+	str_func = sdio_dld->card->sdio_func[func_in_array];
 
 	sdio_dld->tty_str = tty;
 	sdio_dld->tty_str->low_latency = 1;
@@ -1140,14 +1156,6 @@ static int sdio_dld_open(struct tty_struct *tty, struct file *file)
 		return status;
 	}
 
-	status = sdio_dld_create_thread();
-	if (status) {
-		sdio_dld_dealloc_local_buffers();
-		pr_err(MODULE_NAME ": %s, failed in sdio_dld_create_thread()."
-				   "status=%d\n", __func__, status);
-		return status;
-	}
-
 	/* init waiting event of the write callback */
 	init_waitqueue_head(&sdio_dld->write_callback_event.wait_event);
 
@@ -1168,6 +1176,15 @@ static int sdio_dld_open(struct tty_struct *tty, struct file *file)
 	sdio_dld->push_timer.data = (unsigned long) sdio_dld;
 	sdio_dld->push_timer.function = sdio_dld_push_timer_handler;
 
+	status = sdio_dld_create_thread();
+	if (status) {
+		del_timer_sync(&sdio_dld->timer);
+		del_timer_sync(&sdio_dld->push_timer);
+		sdio_dld_dealloc_local_buffers();
+		pr_err(MODULE_NAME ": %s, failed in sdio_dld_create_thread()."
+				   "status=%d\n", __func__, status);
+		return status;
+	}
 	return 0;
 }
 
@@ -1184,7 +1201,6 @@ static int sdio_dld_open(struct tty_struct *tty, struct file *file)
   */
 static void sdio_dld_close(struct tty_struct *tty, struct file *file)
 {
-	int status = 0;
 	struct sdioc_reg_chunk *reg = &sdio_dld->sdio_dloader_data.sdioc_reg;
 
 	/* informing the SDIOC that it can exit boot phase */
@@ -1198,20 +1214,7 @@ static void sdio_dld_close(struct tty_struct *tty, struct file *file)
 	wait_event(sdio_dld->dld_main_thread.exit_wait.wait_event,
 		   sdio_dld->dld_main_thread.exit_wait.wake_up_signal);
 	pr_debug(MODULE_NAME ": %s - CLOSING - WOKE UP...", __func__);
-
-	del_timer_sync(&sdio_dld->timer);
-	del_timer_sync(&sdio_dld->push_timer);
-
-	sdio_dld_dealloc_local_buffers();
-
-	tty_unregister_device(sdio_dld->tty_drv, 0);
-
-	status = tty_unregister_driver(sdio_dld->tty_drv);
-
-	if (status) {
-		pr_err(MODULE_NAME ": %s - tty_unregister_driver() failed\n",
-		       __func__);
-	}
+	
 
 #ifdef CONFIG_DEBUG_FS
 	gd.curr_i = curr_index;
@@ -1262,9 +1265,9 @@ static void sdio_dld_close(struct tty_struct *tty, struct file *file)
 	if (sdio_dld->done_callback)
 		sdio_dld->done_callback();
 
-	pr_info(MODULE_NAME ": %s - Freeing sdio_dld data structure, and "
-		" returning...", __func__);
-	kfree(sdio_dld);
+	schedule_work(&cleanup);
+	pr_info(MODULE_NAME ": %s - Bootloader done, returning...", __func__);
+	
 }
 
 /**
@@ -2427,6 +2430,7 @@ int sdio_downloader_setup(struct mmc_card *card,
 		       "sdio_dld_init_global(). status=%d\n",
 		       __func__, status);
 		kfree(sdio_dld);
+		sdio_dld = NULL;
 		return status;
 	}
 
@@ -2436,6 +2440,7 @@ int sdio_downloader_setup(struct mmc_card *card,
 		pr_err(MODULE_NAME ": %s - param ""sdio_dld->tty_drv"" is "
 				   "NULL.\n", __func__);
 		kfree(sdio_dld);
+		sdio_dld = NULL;
 		return -EINVAL;
 	}
 
@@ -2473,6 +2478,7 @@ int sdio_downloader_setup(struct mmc_card *card,
 
 		sdio_dld->tty_drv = NULL;
 		kfree(sdio_dld);
+		sdio_dld = NULL;
 		return status;
 	}
 
@@ -2482,6 +2488,7 @@ int sdio_downloader_setup(struct mmc_card *card,
 			"failed\n", __func__);
 		tty_unregister_driver(sdio_dld->tty_drv);
 		kfree(sdio_dld);
+		sdio_dld = NULL;
 		return PTR_ERR(tty_dev);
 	}
 
@@ -2530,8 +2537,28 @@ exit_err:
 		pr_err(MODULE_NAME ": %s - tty_unregister_driver() "
 		       "failed. result=%d\n", __func__, -result);
 	kfree(sdio_dld);
+	sdio_dld = NULL;
 	return status;
 }
+
+static void sdio_dld_tear_down(struct work_struct *work)
+{
+    int status = 0;
+
+    del_timer_sync(&sdio_dld->timer);
+    del_timer_sync(&sdio_dld->push_timer);
+    sdio_dld_dealloc_local_buffers();
+    tty_unregister_device(sdio_dld->tty_drv, 0);
+    status = tty_unregister_driver(sdio_dld->tty_drv);
+    if (status) {
+        pr_err(MODULE_NAME ": %s - tty_unregister_driver() failed\n",
+                         __func__);
+        }
+
+    kfree(sdio_dld);
+	sdio_dld = NULL;
+}
+
 
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("SDIO Downloader");

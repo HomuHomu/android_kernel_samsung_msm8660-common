@@ -114,4 +114,26 @@ source "drivers/media/radio/Kconfig"
 
 source "drivers/media/dvb/Kconfig"
 
+#
+# TDMB drivers
+#
+
+source "drivers/media/tdmb/Kconfig"
+
+#ISDB-TMM
+
+source "drivers/media/nmi326/Kconfig"
+
+config ISDBT_NMI
+        boolean "ISDBT one seg NMI"
+                ---help---
+                        This allows ISDBT NMI326.    
+        default n
+
+config ISDBT
+        boolean "ISDBT one seg"
+                ---help---
+                        This allows ISDBT.   
+        default n
+
 endif # MEDIA_SUPPORT

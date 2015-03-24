@@ -1191,9 +1191,11 @@ msmsdcc_data_err(struct msmsdcc_host *host, struct mmc_data *data,
 		 */
 		if (!(data->mrq->cmd->opcode == MMC_BUS_TEST_W
 			|| data->mrq->cmd->opcode == MMC_BUS_TEST_R)) {
-			pr_err("%s: CMD%d: Data timeout\n",
+			pr_err("%s: CMD%d: Data timeout. DAT0 => %d\n",
 				 mmc_hostname(host->mmc),
-				 data->mrq->cmd->opcode);
+				 data->mrq->cmd->opcode,
+				 (readl_relaxed(host->base
+				 + MCI_TEST_INPUT) & 0x2) ? 1 : 0);
 			data->error = -ETIMEDOUT;
 			msmsdcc_dump_sdcc_state(host);
 		}
@@ -1367,19 +1369,22 @@ static void msmsdcc_sg_consumed(struct msmsdcc_host *host,
 				unsigned int length)
 {
 	struct msmsdcc_pio_data *pio = &host->pio;
-
-	if (host->curr.data->flags & MMC_DATA_READ) {
-		if (length > pio->sg_miter.consumed)
-			/*
-			 * consumed 4 bytes, but sgl
-			 * describes < 4 bytes
-			 */
-			_msmsdcc_sg_consume_word(host);
-		else
-			pio->sg_miter.consumed = length;
-	} else
-		if (length < pio->sg_miter.consumed)
-			pio->sg_miter.consumed = length;
+	if(host->curr.data != NULL )
+	{
+		if (host->curr.data->flags & MMC_DATA_READ) {
+			if (length > pio->sg_miter.consumed)
+				/*
+				 * consumed 4 bytes, but sgl
+				 * describes < 4 bytes
+				 */
+				_msmsdcc_sg_consume_word(host);
+			else
+				pio->sg_miter.consumed = length;
+		} else
+			if (length < pio->sg_miter.consumed)
+				pio->sg_miter.consumed = length;
+	}else
+		printk(KERN_ERR "%s:host->curr.data is NULL\n",__func__);
 }
 
 static void msmsdcc_sg_start(struct msmsdcc_host *host)
@@ -2561,6 +2566,9 @@ static void msmsdcc_msm_bus_cancel_work_and_set_vote(
 	unsigned int bw;
 	int vote;
 
+	if(host->plat->is_sdio_al_client)
+		return;
+		
 	if (!host->msm_bus_vote.client_handle)
 		return;
 
@@ -4193,45 +4201,49 @@ void msmsdcc_print_regs(const char *name, void __iomem *base,
 
 	if (!base)
 		return;
-	pr_info("===== %s: Register Dumps @base=0x%x =====\n",
+	pr_err("===== %s: Register Dumps @base=0x%x =====\n",
 		name, (u32)base);
 	for (i = 0; i < no_of_regs; i = i + 4) {
-		pr_info("Reg=0x%.2x: 0x%.8x, 0x%.8x, 0x%.8x, 0x%.8x.\n", i*4,
-				(u32)readl_relaxed(base + i*4),
-				(u32)readl_relaxed(base + ((i+1)*4)),
-				(u32)readl_relaxed(base + ((i+2)*4)),
-				(u32)readl_relaxed(base + ((i+3)*4)));
+		pr_err("Reg=0x%.2x: 0x%.8x, 0x%.8x, 0x%.8x, 0x%.8x\n", i*4,
+			(u32)readl_relaxed(base + i*4),
+			(u32)readl_relaxed(base + ((i+1)*4)),
+			(u32)readl_relaxed(base + ((i+2)*4)),
+			(u32)readl_relaxed(base + ((i+3)*4)));
 	}
 }
 
 static void msmsdcc_dump_sdcc_state(struct msmsdcc_host *host)
 {
 	/* Dump current state of SDCC clocks, power and irq */
-	pr_info("%s: SDCC PWR is %s\n", mmc_hostname(host->mmc),
-			(host->pwr ? "ON" : "OFF"));
-	pr_info("%s: SDCC clks are %s, MCLK rate=%d\n",
-			mmc_hostname(host->mmc),
-			(host->clks_on ? "ON" : "OFF"),
-			(u32)clk_get_rate(host->clk));
-	pr_info("%s: SDCC irq is %s\n", mmc_hostname(host->mmc),
+	pr_err("%s: SDCC PWR is %s\n", mmc_hostname(host->mmc),
+		(host->pwr ? "ON" : "OFF"));
+	pr_err("%s: SDCC clks are %s, MCLK rate=%d\n",
+		mmc_hostname(host->mmc),
+		(host->clks_on ? "ON" : "OFF"),
+		(u32)clk_get_rate(host->clk));
+	pr_err("%s: SDCC irq is %s\n", mmc_hostname(host->mmc),
 		(host->sdcc_irq_disabled ? "disabled" : "enabled"));
 
 	/* Now dump SDCC registers. Don't print FIFO registers */
-	if (host->clks_on)
+	if (host->clks_on) {
 		msmsdcc_print_regs("SDCC-CORE", host->base, 28);
+		pr_err("%s: MCI_TEST_INPUT = 0x%.8x\n",
+			mmc_hostname(host->mmc),
+			readl_relaxed(host->base + MCI_TEST_INPUT));
+	}
 
 	if (host->curr.data) {
 		if (msmsdcc_check_dma_op_req(host->curr.data))
-			pr_info("%s: PIO mode\n", mmc_hostname(host->mmc));
+			pr_err("%s: PIO mode\n", mmc_hostname(host->mmc));
 		else if (host->is_dma_mode)
-			pr_info("%s: ADM mode: busy=%d, chnl=%d, crci=%d\n",
+			pr_err("%s: ADM mode: busy=%d, chnl=%d, crci=%d\n",
 				mmc_hostname(host->mmc), host->dma.busy,
 				host->dma.channel, host->dma.crci);
 		else if (host->is_sps_mode)
-			pr_info("%s: SPS mode: busy=%d\n",
+			pr_err("%s: SPS mode: busy=%d\n",
 				mmc_hostname(host->mmc), host->sps.busy);
 
-		pr_info("%s: xfer_size=%d, data_xfered=%d, xfer_remain=%d\n",
+		pr_err("%s: xfer_size=%d, data_xfered=%d, xfer_remain=%d\n",
 			mmc_hostname(host->mmc), host->curr.xfer_size,
 			host->curr.data_xfered, host->curr.xfer_remain);
 		pr_info("%s: got_dataend=%d, prog_enable=%d,"
@@ -5157,7 +5169,14 @@ msmsdcc_runtime_suspend(struct device *dev)
 		rc = 0;
 		goto out;
 	}
+
+	if (host->pdev_id == 4) {
+		host->mmc->pm_flags |= MMC_PM_KEEP_POWER;
+		printk(KERN_INFO "%s: Enter WIFI suspend\n", __func__);
+	}
+
 	pr_debug("%s: %s: start\n", mmc_hostname(mmc), __func__);
+
 	if (mmc) {
 		host->sdcc_suspending = 1;
 		mmc->suspend_task = current;
@@ -5228,6 +5247,7 @@ msmsdcc_runtime_resume(struct device *dev)
 		return 0;
 
 	pr_debug("%s: %s: start\n", mmc_hostname(mmc), __func__);
+
 	if (mmc) {
 		if (mmc->card && mmc_card_sdio(mmc->card) &&
 				mmc_card_keep_power(mmc)) {
